@@ -1,0 +1,271 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Creepster&display=swap" rel="stylesheet">
+<style>
+  :root { --orange: #ff7518; --purple: #5b2a86; --green: #39ff14; --bg: #0b0610; --size: 520px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: transparent; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; }
+  .stage { position: relative; padding-bottom: 14px; display: flex; flex-direction: column; align-items: center; }
+
+  /* --size is set by fitWheel() so the whole page fits the browser window without scrolling. */
+  .wheel-wrap { position: relative; width: var(--size); height: var(--size); margin-top: 16px; }
+  canvas#wheel {
+    width: 100%; height: 100%; border-radius: 50%;
+    box-shadow: 0 0 40px #ff751855, 0 0 90px #8b00ff44;
+    transition: transform 6s cubic-bezier(.12, .7, .08, 1);
+  }
+  .pointer {
+    position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+    width: 0; height: 0; z-index: 3; transform-origin: 50% 0;
+    border-left: 20px solid transparent; border-right: 20px solid transparent;
+    border-top: 44px solid var(--green);
+    filter: drop-shadow(0 0 8px var(--green));
+  }
+  .hub {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--size) * .18); height: calc(var(--size) * .18); border-radius: 50%; z-index: 2;
+    background: radial-gradient(circle, #1a0d24 55%, #000 100%);
+    border: 4px solid var(--orange);
+    display: flex; align-items: center; justify-content: center; font-size: calc(var(--size) * .096);
+    box-shadow: 0 0 18px var(--orange);
+  }
+  .wheel-wrap.spinning .hub { animation: hubglow .45s ease-in-out infinite alternate; }
+  @keyframes hubglow { to { box-shadow: 0 0 36px var(--orange), 0 0 70px #ff3b00; } }
+
+  button#spin {
+    margin-top: 20px; padding: 10px 46px; font-size: 30px; letter-spacing: 2px;
+    font-family: 'Creepster', cursive; color: #000; background: var(--orange);
+    border: none; border-radius: 40px; cursor: pointer;
+    box-shadow: 0 0 20px var(--orange); transition: transform .15s, box-shadow .15s;
+  }
+  button#spin:hover:not(:disabled) { transform: scale(1.06); box-shadow: 0 0 34px var(--orange); }
+  button#spin:disabled { opacity: .5; cursor: wait; }
+
+  /* result overlay */
+  .overlay {
+    position: absolute; inset: 0; display: none; z-index: 10;
+    align-items: center; justify-content: center; flex-direction: column;
+    background: radial-gradient(circle at 50% 50%, rgba(5, 0, 10, .9) 45%, rgba(5, 0, 10, 0) 72%);
+  }
+  .overlay.show { display: flex; animation: fadein .5s ease-out; }
+  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+  .overlay .label { font-family: 'Creepster', cursive; font-size: calc(var(--size) * .077); color: #c9b6d9; letter-spacing: 2px; }
+  .overlay .num {
+    font-family: 'Creepster', cursive; font-size: calc(var(--size) * .36); line-height: 1; color: var(--orange);
+    text-shadow: 0 0 20px var(--orange), 0 0 60px #8b00ff;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  .overlay .num.title { font-size: calc(var(--size) * .085); line-height: 1.15; text-align: center; max-width: 72%; }
+  .overlay .details { color: #c9b6d9; text-align: center; max-width: 72%; margin-top: 10px; font-size: 15px; line-height: 1.5; }
+  @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+  .overlay .hint { color: #aaa; margin-top: 18px; font-size: 14px; }
+  .ghost { position: absolute; font-size: 42px; animation: rise 3s ease-out forwards; }
+  @keyframes rise { from { transform: translateY(0); opacity: 1; } to { transform: translateY(-420px); opacity: 0; } }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="wheel-wrap">
+    <div class="pointer"></div>
+    <canvas id="wheel"></canvas>
+    <div class="hub">🎃</div>
+  </div>
+  <button id="spin">Spin!</button>
+
+  <div class="overlay" id="overlay">
+    <div class="label">Tonight's movie is...</div>
+    <div class="num" id="result"></div>
+    <div class="details" id="details"></div>
+    <div class="hint">click anywhere to close</div>
+  </div>
+</div>
+
+<script type="text/plain" id="fx-src">__FX__</script>
+<script>
+// [{label, details: [[name, value], ...]}] — numbers ("1".."N") or movie titles + extra columns from app.py.
+const ITEMS = __ITEMS__;
+const N = ITEMS.length;
+
+// Music + page-wide effects (fx.js) live in the parent Streamlit page so they survive reruns.
+// Falls back to this frame if the parent can't be reached.
+const FX = (() => {
+  const src = document.getElementById("fx-src").textContent;
+  for (const w of [window.parent, window]) {
+    try {
+      if (!w.__hwFx) {
+        const s = w.document.createElement("script");
+        s.textContent = src;
+        w.document.body.appendChild(s);
+      }
+      if (w.__hwFx) return w.__hwFx;
+    } catch (e) { /* cross-origin parent */ }
+  }
+  return null;
+})();
+const fx = (name, ...args) => { try { if (FX) FX[name](...args); } catch (e) { console.warn(e); } };
+document.addEventListener("pointerdown", () => fx("unlock"));
+const COLORS = ["#ff7518", "#5b2a86", "#1b1b1b", "#b33c00", "#3d1a5c", "#2b4d1a"];
+const canvas = document.getElementById("wheel");
+const ctx = canvas.getContext("2d");
+const MAX_SIZE = 520, MIN_SIZE = 200, PAGE_BOTTOM = 12;
+const dpr = window.devicePixelRatio || 1;
+let SIZE = 0;
+
+// Size the wheel to the space left between this frame's top and the bottom of the browser window.
+function fitWheel() {
+  let size = MAX_SIZE;
+  try {
+    const fe = window.frameElement, p = window.parent;
+    if (fe && p !== window) {
+      const top = fe.getBoundingClientRect().top + p.scrollY;
+      const rest = document.getElementById("stage").offsetHeight - wrap.offsetHeight; // button, margins
+      size = p.innerHeight - top - rest - PAGE_BOTTOM;
+    }
+  } catch (e) { /* cross-origin parent: keep max size */ }
+  size = Math.floor(Math.max(MIN_SIZE, Math.min(MAX_SIZE, size, window.innerWidth - 24)));
+  if (size === SIZE) return;
+  SIZE = size;
+  document.documentElement.style.setProperty("--size", `${SIZE}px`);
+  canvas.width = SIZE * dpr;
+  canvas.height = SIZE * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawWheel();
+}
+
+// Long labels (movie titles): shrink the font down to 60%, then cut with "…". Leaves ctx.font set.
+function fitLabel(text, fontSize, maxLen) {
+  const minSize = Math.max(9, fontSize * 0.6);
+  for (let s = fontSize; ; s = Math.max(minSize, s - 1)) {
+    ctx.font = `${s}px Creepster, cursive`;
+    if (ctx.measureText(text).width <= maxLen) return text;
+    if (s === minSize) break;
+  }
+  let cut = text;
+  while (cut.length > 1 && ctx.measureText(cut + "…").width > maxLen) cut = cut.slice(0, -1);
+  return cut.trimEnd() + "…";
+}
+
+function drawWheel() {
+  const c = SIZE / 2, r = c - 6, seg = 2 * Math.PI / N;
+  // Pick a color count that never puts the same color side by side (incl. last -> first).
+  let k = COLORS.length;
+  while (k > 2 && N % k === 1) k--;
+  const fontSize = Math.max(9, Math.min(34, 520 / N + 6) * SIZE / MAX_SIZE);
+  const maxTextLen = r - 14 - SIZE * 0.09 - 8;  // from the rim to just outside the hub
+
+  for (let i = 0; i < N; i++) {
+    const a0 = -Math.PI / 2 + i * seg, a1 = a0 + seg;
+    ctx.beginPath();
+    ctx.moveTo(c, c);
+    ctx.arc(c, c, r, a0, a1);
+    ctx.closePath();
+    ctx.fillStyle = (N % 2 === 1 && i === N - 1 && k === 2) ? COLORS[2] : COLORS[i % k];
+    ctx.fill();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.save();
+    ctx.translate(c, c);
+    ctx.rotate(a0 + seg / 2);
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#fff";
+    ctx.shadowColor = "#000";
+    ctx.shadowBlur = 4;
+    ctx.fillText(fitLabel(ITEMS[i].label, fontSize, maxTextLen), r - 14, 0);
+    ctx.restore();
+  }
+  // outer ring
+  ctx.beginPath();
+  ctx.arc(c, c, r, 0, 2 * Math.PI);
+  ctx.strokeStyle = "#ff7518";
+  ctx.lineWidth = 6;
+  ctx.stroke();
+}
+
+function randomInt(max) {
+  // Unbiased random integer in [0, max) using the browser's crypto RNG.
+  const buf = new Uint32Array(1), limit = Math.floor(0x100000000 / max) * max;
+  do { crypto.getRandomValues(buf); } while (buf[0] >= limit);
+  return buf[0] % max;
+}
+
+let rotation = 0;
+const btn = document.getElementById("spin");
+const overlay = document.getElementById("overlay");
+const wrap = document.querySelector(".wheel-wrap");
+const pointer = document.querySelector(".pointer");
+
+// Tick + pointer kick every time a slice boundary passes under the pointer.
+function watchTicks(untilMs) {
+  let last = null;
+  const frame = () => {
+    const t = getComputedStyle(canvas).transform;
+    const m = t === "none" ? new DOMMatrix() : new DOMMatrix(t);
+    const deg = Math.atan2(m.b, m.a) * 180 / Math.PI;
+    const seg = Math.floor(((-deg % 360) + 360) % 360 / (360 / N));
+    if (last !== null && seg !== last) {
+      fx("tick");
+      pointer.animate([{ transform: "translateX(-50%) rotate(-20deg)" }, { transform: "translateX(-50%) rotate(0)" }],
+        { duration: 140, easing: "ease-out" });
+    }
+    last = seg;
+    if (performance.now() < untilMs) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+
+btn.addEventListener("click", () => {
+  btn.disabled = true;
+  fx("unlock");
+  fx("spinStart", 6);
+  wrap.classList.add("spinning");
+  watchTicks(performance.now() + 6050);
+  const winner = randomInt(N);
+  const segDeg = 360 / N;
+  // Land somewhere inside the winning slice, not exactly at its edge.
+  const target = (winner + 0.2 + 0.6 * (randomInt(1000) / 1000)) * segDeg;
+  const current = ((rotation % 360) + 360) % 360;
+  const delta = ((360 - target) - current + 720) % 360;
+  rotation += 360 * (6 + randomInt(4)) + delta;
+  canvas.style.transform = `rotate(${rotation}deg)`;
+
+  setTimeout(() => {
+    const item = ITEMS[winner], result = document.getElementById("result");
+    result.textContent = item.label;
+    result.classList.toggle("title", item.label.length > 3);  // numbers stay huge, titles get a readable size
+    document.getElementById("details").textContent = item.details.map(([k, v]) => `${k}: ${v}`).join("  ·  ");
+    overlay.classList.add("show");
+    wrap.classList.remove("spinning");
+    fx("reveal");
+    for (let i = 0; i < 10; i++) {
+      const g = document.createElement("div");
+      g.className = "ghost";
+      g.textContent = ["👻", "🦇", "🎃", "💀"][i % 4];
+      g.style.left = `${5 + randomInt(90)}%`;
+      g.style.bottom = "0";
+      g.style.animationDelay = `${i * 0.15}s`;
+      overlay.appendChild(g);
+      setTimeout(() => g.remove(), 3500);
+    }
+    btn.disabled = false;
+  }, 6100);
+});
+
+overlay.addEventListener("click", () => overlay.classList.remove("show"));
+
+fitWheel();
+// Redraw once the Creepster font is in, and refit when the window (or the title above, as fonts load) changes.
+document.fonts.load("20px Creepster").finally(() => { SIZE = 0; fitWheel(); });
+setTimeout(fitWheel, 600);
+window.addEventListener("resize", fitWheel);
+try {
+  window.parent.addEventListener("resize", fitWheel);
+  window.addEventListener("pagehide", () => window.parent.removeEventListener("resize", fitWheel));
+} catch (e) { /* cross-origin parent */ }
+</script>
+</body>
+</html>
